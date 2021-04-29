@@ -7,6 +7,7 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 import pyrr
 from TextureLoader import load_texture_pygame
 from ObjLoader import ObjLoader
+import numpy as np
 
 from camera import Camera
 
@@ -72,6 +73,8 @@ def mouse_look(xpos, ypos):
 VAOs = []
 textures = []
 buf_lens = []
+obj_locs = []   # This location includes the applied rotation info obtained from glUniformMatrix4fv
+disp_list_indices = []
 
 # Returns the object index
 def load_obj(obj_filepath, texture_filepath):
@@ -105,14 +108,112 @@ def load_obj(obj_filepath, texture_filepath):
 
     return len(VAOs)-1
 
-def draw_obj(obj_index, xpos, ypos, zpos, model_loc):
-    obj_pos = pyrr.matrix44.create_from_translation(pyrr.Vector3([xpos, ypos, zpos]))
-    
+def rot_matrix_x_44(degrees):
+    c, s = np.cos(np.deg2rad(degrees)), np.sin(np.deg2rad(degrees))
+    return np.array(((1, 0, 0, 0), (0, c, s, 0), (0, -s, c, 0), (0, 0, 0, 1)))
+
+def rot_matrix_y_44(degrees):
+    c, s = np.cos(np.deg2rad(degrees)), np.sin(np.deg2rad(degrees))
+    return np.array(((c, 0, -s, 0), (0, 1, 0, 0), (s, 0, c, 0), (0, 0, 0, 1)))
+
+def rot_matrix_z_44(degrees):
+    c, s = np.cos(np.deg2rad(degrees)), np.sin(np.deg2rad(degrees))
+    return np.array(((c, -s, 0, 0), (s, c, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)))
+
+def draw_obj(obj_index, xpos, ypos, zpos, roll, pitch, yaw, obj_loc):
+    #TODO We really should only change obj_pos upon updated pos or rotation
+    translation_matrix = pyrr.matrix44.create_from_translation(pyrr.Vector3([xpos, ypos, zpos]))
+    rot_x = rot_matrix_x_44(roll)
+    rot_y = rot_matrix_y_44(pitch)
+    rot_z = rot_matrix_z_44(yaw)
+    pos_matrix = pyrr.matrix44.multiply(pyrr.matrix44.multiply(pyrr.matrix44.multiply(rot_x, rot_y), rot_z), translation_matrix)
+    #rot_y = pyrr.Matrix44.from_y_rotation(-0.8 * glfw.get_time())
+
     # draw the obj
     glBindVertexArray(VAOs[obj_index])
     glBindTexture(GL_TEXTURE_2D, textures[obj_index])
-    glUniformMatrix4fv(model_loc, 1, GL_FALSE, obj_pos)
+    glUniformMatrix4fv(obj_loc, 1, GL_FALSE, pos_matrix)
     glDrawArrays(GL_TRIANGLES, 0, buf_lens[obj_index])
+
+def rotate_obj(obj_index, pitch, roll, yaw):
+    # Create rotation matrices from the euler angles
+    pass
+
+def create_axes_list():
+        '''Creates display lists to render unit length x,y,z axes.'''
+        index = glGenLists(1)
+        disp_list_indices.append(index)
+        glNewList(index, GL_COMPILE)
+        glBegin(GL_LINES)
+        glColor3f(1.0, 0.0, 0.0)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(10.0, 0.0, 0.0)
+        glColor3f(0.0, 1.0, 0.0)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(0.0, 10.0, 0.0)
+        glColor3f(0.0, 0.0, 1.0)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(0.0, 0.0, 10.0)
+
+        glColor3f(1.0, 1.0, 1.0)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(-10.0, 0.0, 0.0)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(0.0, -10.0, 0.0)
+        glVertex3f(0.0, 0.0, 0.0)
+        glVertex3f(0.0, 0.0, -10.0)
+        glEnd()
+        glEndList()
+'''
+        def label_axis(x, y, z, label):
+            glRasterPos3f(x, y, z)
+            glut.glutBitmapString(glut.GLUT_BITMAP_HELVETICA_18,
+                                  str(label))
+        def label_axis_for_feature(x, y, z, feature_ind):
+            feature = self.octant_features[feature_ind[0]][feature_ind[1]]
+            label_axis(x, y, z, self.labels[feature])
+
+        if self._have_glut:
+            try:
+                import OpenGL.GLUT as glut
+                if bool(glut.glutBitmapString):
+                    if self.quadrant_mode == 'independent':
+                        label_axis(1.05, 0.0, 0.0, 'x')
+                        label_axis(0.0, 1.05, 0.0, 'y')
+                        label_axis(0.0, 0.0, 1.05, 'z')
+                    elif self.quadrant_mode == 'mirrored':
+                        label_axis_for_feature(1.05, 0.0, 0.0, (0, 0))
+                        label_axis_for_feature(0.0, 1.05, 0.0, (0, 1))
+                        label_axis_for_feature(0.0, 0.0, 1.05, (0, 2))
+                        label_axis_for_feature(-1.05, 0.0, 0.0, (6, 0))
+                        label_axis_for_feature(0.0, -1.05, 0.0, (6, 1))
+                        label_axis_for_feature(0.0, 0.0, -1.05, (6, 2))
+                    else:
+                        label_axis_for_feature(1.05, 0.0, 0.0, (0, 0))
+                        label_axis_for_feature(0.0, 1.05, 0.0, (0, 1))
+                        label_axis_for_feature(0.0, 0.0, 1.05, (0, 2))
+            except:
+                pass
+'''
+
+def draw_axes():
+    glBegin(GL_LINES)
+    glColor3f(1., 0., 0.)
+    glVertex3f(-5000., 0., 0.)
+    glVertex3f(5000., 0., 0.)
+    glEnd()
+
+    glBegin(GL_LINES)
+    glColor3f(0., 0., 1.)
+    glVertex3f(0., -5000., 0.)
+    glVertex3f(0., 5000., 0.)
+    glEnd()
+
+    glBegin(GL_LINES)
+    glColor3f(0., 1., 0.)
+    glVertex3f(0., 0., -5000.)
+    glVertex3f(0., 0., 5000.)
+    glEnd()
 
 def main():
     pygame.init()
@@ -140,6 +241,9 @@ def main():
 
     earth_index = load_obj("meshes/earth.obj", "meshes/earth.png")
 
+    create_axes_list()
+    glCallList(disp_list_indices[-1])
+    
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -185,8 +289,8 @@ def main():
         view = cam.get_view_matrix()
         glUniformMatrix4fv(view_loc, 1, GL_FALSE, view)
 
-        draw_obj(earth_index, 0, 0, 10, model_loc)
-
+        rot_y = 0.02 * pygame.time.get_ticks()
+        #draw_obj(earth_index, 0, 0, 0, 0, rot_y, 22.5, model_loc)
         pygame.display.flip()
 
     pygame.quit()
