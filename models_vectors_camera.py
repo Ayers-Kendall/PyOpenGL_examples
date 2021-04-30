@@ -18,8 +18,35 @@ WIDTH, HEIGHT = 1280, 720
 lastX, lastY = WIDTH / 2, HEIGHT / 2
 first_mouse = True
 
+vertex_shader_geometry = """
+#version 330 core
 
-vertex_src = """
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec4 color;
+
+uniform mat4 model;
+uniform mat4 projection;
+uniform mat4 view;
+
+out vec4 vColor;
+
+void main() {
+  gl_Position = vec4(position, 1.0);
+  vColor = color;
+}
+"""
+
+fragment_shader_geometry = """
+#version 330 core
+in vec4 vColor;
+out vec4 fColor;
+
+void main(void) {
+  fColor = vColor;
+}
+"""
+
+vertex_shader_obj = """
 # version 330
 
 layout(location = 0) in vec3 a_position;
@@ -32,14 +59,13 @@ uniform mat4 view;
 
 out vec2 v_texture;
 
-void main()
-{
+void main() {
     gl_Position = projection * view * model * vec4(a_position, 1.0);
     v_texture = a_texture;
 }
 """
 
-fragment_src = """
+fragment_shader_obj = """
 # version 330
 
 in vec2 v_texture;
@@ -48,8 +74,7 @@ out vec4 out_color;
 
 uniform sampler2D s_texture;
 
-void main()
-{
+void main() {
     out_color = texture(s_texture, v_texture);
 }
 """
@@ -71,28 +96,26 @@ def mouse_look(xpos, ypos):
 
     cam.process_mouse_movement(xoffset, yoffset)
 
-VAOs = []
-VBOs = []
-textures = []
-buf_lens = []
-obj_locs = []   # This location includes the applied rotation info obtained from glUniformMatrix4fv
-disp_list_indices = []
+shaders = {}    # Holds {'shader_name': {'shader_program': ..., 'model_loc': ..., 'proj_loc': ..., 'view_loc': ...}}
+all_objs = {}   # Holds {'obj_name': {'VAO': ..., 'VBO_pos': ..., 'VBO_color': ..., 'textures': ..., '': ..., 'num_faces': ...}}
+lines = []      # Holds line names which are keys for the all_objs dict
+objs = []       # Holds names of objs read in from .obj models
 
 # Returns the object index
 def load_obj(obj_filepath, texture_filepath):
-    VAOs.append(glGenVertexArrays(1))
-    VBOs.append(glGenBuffers(1))
-    textures.append(glGenTextures(1))
+    obj_name = 'obj'+str(len(objs)).zfill(5)
+    objs.append(obj_name)
+    all_objs[obj_name] = {'VAO': glGenVertexArrays(1), 'VBO_pos': glGenBuffers(1), 'textures': glGenTextures(1)}
 
-    obj_indices, obj_buffer = ObjLoader.load_model(obj_filepath, scale=0.3)
+    obj_faces, obj_buffer = ObjLoader.load_model(obj_filepath, scale=0.3)
 
-    buf_lens.append(len(obj_indices))
+    all_objs[obj_name]['num_faces'] = len(obj_faces)
 
     # Vertex Array Object
-    glBindVertexArray(VAOs[-1])
+    glBindVertexArray(all_objs[obj_name]['VAO'])
 
     # Vertex Buffer Object
-    glBindBuffer(GL_ARRAY_BUFFER, VBOs[-1])
+    glBindBuffer(GL_ARRAY_BUFFER, all_objs[obj_name]['VBO_pos'])
     glBufferData(GL_ARRAY_BUFFER, obj_buffer.nbytes, obj_buffer, GL_STATIC_DRAW)
 
     # vertices
@@ -102,13 +125,13 @@ def load_obj(obj_filepath, texture_filepath):
     # textures
     glEnableVertexAttribArray(1)
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, obj_buffer.itemsize * 8, ctypes.c_void_p(12))
-    load_texture_pygame(texture_filepath, textures[-1])
+    load_texture_pygame(texture_filepath, all_objs[obj_name]['textures'])
 
     # normals
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, obj_buffer.itemsize * 8, ctypes.c_void_p(20))
     glEnableVertexAttribArray(2)
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, obj_buffer.itemsize * 8, ctypes.c_void_p(20))
 
-    return len(VAOs)-1
+    return obj_name
 
 def rot_matrix_x_44(degrees):
     c, s = np.cos(np.deg2rad(degrees)), np.sin(np.deg2rad(degrees))
@@ -122,118 +145,64 @@ def rot_matrix_z_44(degrees):
     c, s = np.cos(np.deg2rad(degrees)), np.sin(np.deg2rad(degrees))
     return np.array(((c, -s, 0, 0), (s, c, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)))
 
-def draw_obj(obj_index, xpos, ypos, zpos, roll, pitch, yaw, obj_loc):
+def draw_obj(obj_name, xpos, ypos, zpos, roll, pitch, yaw):
     #TODO We really should only change obj_pos upon updated pos or rotation
     translation_matrix = pyrr.matrix44.create_from_translation(pyrr.Vector3([xpos, ypos, zpos]))
     rot_x = rot_matrix_x_44(roll)
     rot_y = rot_matrix_y_44(pitch)
     rot_z = rot_matrix_z_44(yaw)
     pos_matrix = pyrr.matrix44.multiply(pyrr.matrix44.multiply(pyrr.matrix44.multiply(rot_x, rot_y), rot_z), translation_matrix)
-    #rot_y = pyrr.Matrix44.from_y_rotation(-0.8 * glfw.get_time())
 
     # draw the obj
-    glBindVertexArray(VAOs[obj_index])
-    glBindTexture(GL_TEXTURE_2D, textures[obj_index])
-    glUniformMatrix4fv(obj_loc, 1, GL_FALSE, pos_matrix)
-    glDrawArrays(GL_TRIANGLES, 0, buf_lens[obj_index])
+    glBindVertexArray(all_objs[obj_name]['VAO'])
+    glBindTexture(GL_TEXTURE_2D, all_objs[obj_name]['textures'])
+    glUniformMatrix4fv(shaders['shader_obj']['model_loc'], 1, GL_FALSE, pos_matrix)
+    glDrawArrays(GL_TRIANGLES, 0, all_objs[obj_name]['num_faces'])
 
 def rotate_obj(obj_index, pitch, roll, yaw):
     # Create rotation matrices from the euler angles
     pass
 
-
-'''
-        def label_axis(x, y, z, label):
-            glRasterPos3f(x, y, z)
-            glut.glutBitmapString(glut.GLUT_BITMAP_HELVETICA_18,
-                                  str(label))
-        def label_axis_for_feature(x, y, z, feature_ind):
-            feature = self.octant_features[feature_ind[0]][feature_ind[1]]
-            label_axis(x, y, z, self.labels[feature])
-
-        if self._have_glut:
-            try:
-                import OpenGL.GLUT as glut
-                if bool(glut.glutBitmapString):
-                    if self.quadrant_mode == 'independent':
-                        label_axis(1.05, 0.0, 0.0, 'x')
-                        label_axis(0.0, 1.05, 0.0, 'y')
-                        label_axis(0.0, 0.0, 1.05, 'z')
-                    elif self.quadrant_mode == 'mirrored':
-                        label_axis_for_feature(1.05, 0.0, 0.0, (0, 0))
-                        label_axis_for_feature(0.0, 1.05, 0.0, (0, 1))
-                        label_axis_for_feature(0.0, 0.0, 1.05, (0, 2))
-                        label_axis_for_feature(-1.05, 0.0, 0.0, (6, 0))
-                        label_axis_for_feature(0.0, -1.05, 0.0, (6, 1))
-                        label_axis_for_feature(0.0, 0.0, -1.05, (6, 2))
-                    else:
-                        label_axis_for_feature(1.05, 0.0, 0.0, (0, 0))
-                        label_axis_for_feature(0.0, 1.05, 0.0, (0, 1))
-                        label_axis_for_feature(0.0, 0.0, 1.05, (0, 2))
-            except:
-                pass
-'''
-'''
-C++ OpenGL lines with shaders example
-struct LineSegment_t
-{
-  float x1, y1;
-  float r1,g1,b1,a1;
-  float x2, y2;
-  float r2,g2,b2,a2;
-};
-
-int num_verts = lines.size()*2;
-glBindVertexArray( line_vao ); // setup for the layout of LineSegment_t
-glBindBuffer(GL_ARRAY_BUFFER, LineBufferObject);
-glBufferData(GL_ARRAY_BUFFER, sizeof(LineSegment_t)/2 * num_verts, &lines[0], GL_DYNAMIC_DRAW);
-glDrawArrays(GL_LINES, 0, num_verts );
-'''
-
-''' Another possible exmple
-GLfloat lineSeg[] =
-{
-    0.0f, 0.0f, 0.0f, // first vertex
-    2.0f, 0.0f, 2.0f // second vertex
-};
-
-GLuint lineVAO, lineVBO;
-glGenVertexArrays(1, &lineVAO);
-glGenBuffers(1, &lineVBO);
-glBindVertexArray(lineVAO);
-glBindBuffer(GL_ARRAY_BUFFER, lineVBO);
-glBufferData(GL_ARRAY_BUFFER, sizeof(lineSeg), &lineSeg, GL_STATIC_DRAW);
-glEnableVertexAttribArray(0);
-glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(GLfloat), (void*)0);
-'''
-
 # Returns the index of the object in VAOs, buf_lens, 
-def load_line(x1, y1, z1, x2, y2, z2, red, green, blue):
-    VAOs.append(glGenVertexArrays(1))
-    VBOs.append(glGenBuffers(1))
-    buf = np.array([x1, y1, z1, x2, y2, z2], dtype='float32')
-    buf_lens.append(2)
+def load_line(x1, y1, z1, x2, y2, z2, red, green, blue, alpha):
+    line_name = 'line'+str(len(lines)).zfill(5)
+    lines.append(line_name)
+    all_objs[line_name] = {'VAO': glGenVertexArrays(1), 'VBO_pos': glGenBuffers(1), 'VBO_color': glGenBuffers(1)}
+    pos_buf = np.array([x1, y1, z1, x2, y2, z2], dtype='float32')
+    col_buf = np.array([red, green, blue, alpha, red, green, blue, alpha], dtype='float32')
 
     # Vertex Array Object
-    glBindVertexArray(VAOs[-1])
-    glBindBuffer(GL_ARRAY_BUFFER, VBOs[-1])
-    glBufferData(GL_ARRAY_BUFFER, buf.nbytes, buf, GL_STATIC_DRAW)
-    glEnableVertexAttribArray(0)    # THIS CAUSES CRASH!! TODO
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * 4, None)
-    return len(VBOs)-1
+    glBindVertexArray(all_objs[line_name]['VAO'])
+
+    # Vertex Buffer Objects
+    glBindBuffer(GL_ARRAY_BUFFER, all_objs[line_name]['VBO_pos'])
+    glBufferData(GL_ARRAY_BUFFER, pos_buf.nbytes, pos_buf, GL_STATIC_DRAW)
+    glBindBuffer(GL_ARRAY_BUFFER, all_objs[line_name]['VBO_color'])
+    glBufferData(GL_ARRAY_BUFFER, col_buf.nbytes, col_buf, GL_STATIC_DRAW)
+
+    # Vertices
+    glEnableVertexAttribArray(0)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None)
+
+    # Colors
+    glEnableVertexAttribArray(1)
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, None)
+    
+    return line_name
 
 
-def draw_lines(obj_index, obj_loc):
+def draw_line(line_name):
     translation_matrix = pyrr.matrix44.create_from_translation(pyrr.Vector3([0, 0, 0]))
-    glBindVertexArray(VAOs[obj_index])
-    glBindBuffer(GL_ARRAY_BUFFER, VBOs[obj_index])
-    glColor3f(0.0, 1.0, 0.0)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * 4, None)
-    glUniformMatrix4fv(obj_loc, 1, GL_FALSE, translation_matrix)
-    glDrawArrays(GL_LINES, 0, buf_lens[obj_index])
-    #glDisableVertexAttribArray(0); //?
+    glBindVertexArray(all_objs[line_name]['VAO'])
+    glUniformMatrix4fv(shaders['shader_geom']['model_loc'], 1, GL_FALSE, translation_matrix)
+    glDrawArrays(GL_LINES, 0, 2)
     #glBindBuffer(GL_ARRAY_BUFFER, 0); //Unbind
 
+def setup_program_obj(program):
+    pass
+
+def setup_program_geometry(program):
+    pass
 
 def main():
     pygame.init()
@@ -241,31 +210,36 @@ def main():
     pygame.mouse.set_visible(True)
     pygame.event.set_grab(True)
 
-    #gluPerspective(45, (WIDTH / HEIGHT), 0.1, 50.0)
+    shaders['shader_obj'] = {}
+    shaders['shader_obj']['shader_program'] = compileProgram(compileShader(vertex_shader_obj, GL_VERTEX_SHADER), compileShader(fragment_shader_obj, GL_FRAGMENT_SHADER))
+    shaders['shader_obj']['model_loc'] = glGetUniformLocation(shaders['shader_obj']['shader_program'], "model")
+    shaders['shader_obj']['proj_loc'] = glGetUniformLocation(shaders['shader_obj']['shader_program'], "projection")
+    shaders['shader_obj']['view_loc'] = glGetUniformLocation(shaders['shader_obj']['shader_program'], "view")
+    
+    shaders['shader_geom'] = {}
+    shaders['shader_geom']['shader_program'] = compileProgram(compileShader(vertex_shader_geometry, GL_VERTEX_SHADER), compileShader(fragment_shader_geometry, GL_FRAGMENT_SHADER))
+    shaders['shader_geom']['model_loc'] = glGetUniformLocation(shaders['shader_geom']['shader_program'], "model")
+    shaders['shader_geom']['proj_loc'] = glGetUniformLocation(shaders['shader_geom']['shader_program'], "projection")
+    shaders['shader_geom']['view_loc'] = glGetUniformLocation(shaders['shader_geom']['shader_program'], "view")
 
-    shader = compileProgram(compileShader(vertex_src, GL_VERTEX_SHADER), compileShader(fragment_src, GL_FRAGMENT_SHADER))
+    projection = pyrr.matrix44.create_perspective_projection_matrix(45, WIDTH / HEIGHT, 0.1, 100)
 
-    glUseProgram(shader)
+    glUseProgram(shaders['shader_obj']['shader_program'])
     glClearColor(0, 0.1, 0.1, 1)
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glUniformMatrix4fv(shaders['shader_obj']['proj_loc'], 1, GL_FALSE, projection)
 
-    projection = pyrr.matrix44.create_perspective_projection_matrix(45, WIDTH / HEIGHT, 0.1, 100)
-
-    model_loc = glGetUniformLocation(shader, "model")
-    proj_loc = glGetUniformLocation(shader, "projection")
-    view_loc = glGetUniformLocation(shader, "view")
-
-    glUniformMatrix4fv(proj_loc, 1, GL_FALSE, projection)
+    glUseProgram(shaders['shader_geom']['shader_program'])
+    glUniformMatrix4fv(shaders['shader_geom']['proj_loc'], 1, GL_FALSE, projection)
 
     running = True
 
-    #earth_index = load_obj("meshes/earth.obj", "meshes/earth.png")
-
-    line1 = load_line(0, 0, 0, 50, 0, 0, 1, 0, 0)
+    earth_name = load_obj("meshes/earth.obj", "meshes/earth.png")
+    line1_name = load_line(0, 0, 0, 50, 0, 0, 0, 1, 0, 1)
     #glTranslatef(0.0, 0.0, -5.0)
-    
+
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -309,13 +283,21 @@ def main():
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
         view = cam.get_view_matrix()
-        glUniformMatrix4fv(view_loc, 1, GL_FALSE, view)
 
+        # Draw .obj objects
+        glUseProgram(shaders['shader_obj']['shader_program'])
+        glUniformMatrix4fv(shaders['shader_obj']['view_loc'], 1, GL_FALSE, view)
         rot_y = 0.02 * pygame.time.get_ticks()
-        #draw_obj(earth_index, 0, 0, 0, 0, rot_y, 22.5, model_loc)
-        draw_lines(line1, model_loc)
-        pygame.display.flip()
+        draw_obj(earth_name, 0, 0, 0, 0, rot_y, 22.5)
         pygame.time.wait(10)
+
+        # Draw geometric objects
+        glUseProgram(shaders['shader_geom']['shader_program'])
+        glUniformMatrix4fv(shaders['shader_geom']['view_loc'], 1, GL_FALSE, view)
+        draw_line(line1_name)
+        
+        pygame.display.flip()
+        pygame.time.wait(1)
 
     pygame.quit()
 
