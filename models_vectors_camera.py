@@ -9,6 +9,7 @@ import pyrr
 from TextureLoader import load_texture_pygame
 from ObjLoader import ObjLoader
 import numpy as np
+from ctypes import c_void_p
 
 from camera import Camera
 
@@ -19,7 +20,7 @@ lastX, lastY = WIDTH / 2, HEIGHT / 2
 first_mouse = True
 
 vertex_shader_geometry = """
-#version 330 core
+#version 330
 
 layout(location = 0) in vec3 position;
 layout(location = 1) in vec4 color;
@@ -31,13 +32,13 @@ uniform mat4 view;
 out vec4 vColor;
 
 void main() {
-  gl_Position = vec4(position, 1.0);
+  gl_Position = projection * view * model * vec4(position, 1.0);
   vColor = color;
 }
 """
 
 fragment_shader_geometry = """
-#version 330 core
+#version 330
 in vec4 vColor;
 out vec4 fColor;
 
@@ -94,20 +95,20 @@ def mouse_look(xpos, ypos):
     lastX = xpos
     lastY = ypos
 
-    cam.process_mouse_movement(xoffset, yoffset)
+    cam.process_mouse_movement(xoffset, yoffset, constrain_pitch=False)
 
 shaders = {}    # Holds {'shader_name': {'shader_program': ..., 'model_loc': ..., 'proj_loc': ..., 'view_loc': ...}}
-all_objs = {}   # Holds {'obj_name': {'VAO': ..., 'VBO_pos': ..., 'VBO_color': ..., 'textures': ..., '': ..., 'num_faces': ...}}
+all_objs = {}   # Holds {'obj_name': {'VAO': ..., 'VBO': ..., 'textures': ..., '': ..., 'num_faces': ...}}
 lines = []      # Holds line names which are keys for the all_objs dict
 objs = []       # Holds names of objs read in from .obj models
 
 # Returns the object index
-def load_obj(obj_filepath, texture_filepath):
+def load_obj(obj_filepath, texture_filepath, scale=1.0):
     obj_name = 'obj'+str(len(objs)).zfill(5)
     objs.append(obj_name)
-    all_objs[obj_name] = {'VAO': glGenVertexArrays(1), 'VBO_pos': glGenBuffers(1), 'textures': glGenTextures(1)}
+    all_objs[obj_name] = {'VAO': glGenVertexArrays(1), 'VBO': glGenBuffers(1), 'textures': glGenTextures(1)}
 
-    obj_faces, obj_buffer = ObjLoader.load_model(obj_filepath, scale=0.3)
+    obj_faces, obj_buffer = ObjLoader.load_model(obj_filepath, scale)
 
     all_objs[obj_name]['num_faces'] = len(obj_faces)
 
@@ -115,7 +116,7 @@ def load_obj(obj_filepath, texture_filepath):
     glBindVertexArray(all_objs[obj_name]['VAO'])
 
     # Vertex Buffer Object
-    glBindBuffer(GL_ARRAY_BUFFER, all_objs[obj_name]['VBO_pos'])
+    glBindBuffer(GL_ARRAY_BUFFER, all_objs[obj_name]['VBO'])
     glBufferData(GL_ARRAY_BUFFER, obj_buffer.nbytes, obj_buffer, GL_STATIC_DRAW)
 
     # vertices
@@ -167,26 +168,23 @@ def rotate_obj(obj_index, pitch, roll, yaw):
 def load_line(x1, y1, z1, x2, y2, z2, red, green, blue, alpha):
     line_name = 'line'+str(len(lines)).zfill(5)
     lines.append(line_name)
-    all_objs[line_name] = {'VAO': glGenVertexArrays(1), 'VBO_pos': glGenBuffers(1), 'VBO_color': glGenBuffers(1)}
-    pos_buf = np.array([x1, y1, z1, x2, y2, z2], dtype='float32')
-    col_buf = np.array([red, green, blue, alpha, red, green, blue, alpha], dtype='float32')
+    all_objs[line_name] = {'VAO': glGenVertexArrays(1), 'VBO': glGenBuffers(1)}
+    buf = np.array([x1, y1, z1, red, green, blue, alpha, x2, y2, z2, red, green, blue, alpha], dtype='float32')
 
     # Vertex Array Object
     glBindVertexArray(all_objs[line_name]['VAO'])
 
     # Vertex Buffer Objects
-    glBindBuffer(GL_ARRAY_BUFFER, all_objs[line_name]['VBO_pos'])
-    glBufferData(GL_ARRAY_BUFFER, pos_buf.nbytes, pos_buf, GL_STATIC_DRAW)
-    glBindBuffer(GL_ARRAY_BUFFER, all_objs[line_name]['VBO_color'])
-    glBufferData(GL_ARRAY_BUFFER, col_buf.nbytes, col_buf, GL_STATIC_DRAW)
+    glBindBuffer(GL_ARRAY_BUFFER, all_objs[line_name]['VBO'])
+    glBufferData(GL_ARRAY_BUFFER, buf.nbytes, buf, GL_STATIC_DRAW)
 
     # Vertices
     glEnableVertexAttribArray(0)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * 4, None)
 
     # Colors
     glEnableVertexAttribArray(1)
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 0, None)
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 7 * 4, c_void_p(3 * 4))
     
     return line_name
 
@@ -203,6 +201,14 @@ def setup_program_obj(program):
 
 def setup_program_geometry(program):
     pass
+
+def set_projection_matrices(width, height):
+    projection = pyrr.matrix44.create_perspective_projection_matrix(45, width / height, 0.1, 100)
+    glUseProgram(shaders['shader_obj']['shader_program'])
+    glUniformMatrix4fv(shaders['shader_obj']['proj_loc'], 1, GL_FALSE, projection)
+    glUseProgram(shaders['shader_geom']['shader_program'])
+    glUniformMatrix4fv(shaders['shader_geom']['proj_loc'], 1, GL_FALSE, projection)
+
 
 def main():
     pygame.init()
@@ -222,23 +228,26 @@ def main():
     shaders['shader_geom']['proj_loc'] = glGetUniformLocation(shaders['shader_geom']['shader_program'], "projection")
     shaders['shader_geom']['view_loc'] = glGetUniformLocation(shaders['shader_geom']['shader_program'], "view")
 
-    projection = pyrr.matrix44.create_perspective_projection_matrix(45, WIDTH / HEIGHT, 0.1, 100)
-
     glUseProgram(shaders['shader_obj']['shader_program'])
     glClearColor(0, 0.1, 0.1, 1)
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-    glUniformMatrix4fv(shaders['shader_obj']['proj_loc'], 1, GL_FALSE, projection)
 
     glUseProgram(shaders['shader_geom']['shader_program'])
-    glUniformMatrix4fv(shaders['shader_geom']['proj_loc'], 1, GL_FALSE, projection)
+    glClearColor(0, 0.1, 0.1, 1)
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+    set_projection_matrices(WIDTH, HEIGHT)
 
     running = True
 
-    earth_name = load_obj("meshes/earth.obj", "meshes/earth.png")
-    line1_name = load_line(0, 0, 0, 50, 0, 0, 0, 1, 0, 1)
-    #glTranslatef(0.0, 0.0, -5.0)
+    earth_key = load_obj("meshes/earth.obj", "meshes/earth.png", scale=0.1)
+    axis_x_key = load_line(0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0)
+    axis_y_key = load_line(0.0, 0.0, 0.0, 0.0, 50.0, 0, 0.0, 1.0, 0.0, 1.0)
+    axis_z_key = load_line(0.0, 0.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 1.0, 1.0)
 
     while running:
         for event in pygame.event.get():
@@ -249,8 +258,7 @@ def main():
 
             if event.type == pygame.VIDEORESIZE:
                 glViewport(0, 0, event.w, event.h)
-                projection = pyrr.matrix44.create_perspective_projection_matrix(45, event.w / event.h, 0.1, 100)
-                glUniformMatrix4fv(proj_loc, 1, GL_FALSE, projection)
+                set_projection_matrices(event.w, event.h)
 
         keys_pressed = pygame.key.get_pressed()
         if keys_pressed[pygame.K_a]:
@@ -288,14 +296,21 @@ def main():
         glUseProgram(shaders['shader_obj']['shader_program'])
         glUniformMatrix4fv(shaders['shader_obj']['view_loc'], 1, GL_FALSE, view)
         rot_y = 0.02 * pygame.time.get_ticks()
-        draw_obj(earth_name, 0, 0, 0, 0, rot_y, 22.5)
-        pygame.time.wait(10)
+        draw_obj(earth_key, 0, 0, 0, 0, rot_y, 22.5)
 
         # Draw geometric objects
         glUseProgram(shaders['shader_geom']['shader_program'])
         glUniformMatrix4fv(shaders['shader_geom']['view_loc'], 1, GL_FALSE, view)
-        draw_line(line1_name)
+        draw_line(axis_x_key)
+        draw_line(axis_y_key)
+        draw_line(axis_z_key)
         
+        '''
+        glUseProgram(shaders['shader_obj']['shader_program'])
+        print("VIEW MATRIX (obj): \n", shaders['shader_obj']['view_loc'])
+        glUseProgram(shaders['shader_geom']['shader_program'])
+        print("VIEW MATRIX (geom): \n", shaders['shader_geom']['view_loc'])
+        '''
         pygame.display.flip()
         pygame.time.wait(1)
 
