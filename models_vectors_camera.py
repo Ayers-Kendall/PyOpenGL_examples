@@ -4,6 +4,7 @@ os.environ['SDL_VIDEO_WINDOW_POS'] = '400,200'
 import pygame
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
+from OpenGL.GLU import *
 import pyrr
 from TextureLoader import load_texture_pygame
 from ObjLoader import ObjLoader
@@ -71,6 +72,7 @@ def mouse_look(xpos, ypos):
     cam.process_mouse_movement(xoffset, yoffset)
 
 VAOs = []
+VBOs = []
 textures = []
 buf_lens = []
 obj_locs = []   # This location includes the applied rotation info obtained from glUniformMatrix4fv
@@ -79,7 +81,7 @@ disp_list_indices = []
 # Returns the object index
 def load_obj(obj_filepath, texture_filepath):
     VAOs.append(glGenVertexArrays(1))
-    VBO = glGenBuffers(1)
+    VBOs.append(glGenBuffers(1))
     textures.append(glGenTextures(1))
 
     obj_indices, obj_buffer = ObjLoader.load_model(obj_filepath, scale=0.3)
@@ -90,7 +92,7 @@ def load_obj(obj_filepath, texture_filepath):
     glBindVertexArray(VAOs[-1])
 
     # Vertex Buffer Object
-    glBindBuffer(GL_ARRAY_BUFFER, VBO)
+    glBindBuffer(GL_ARRAY_BUFFER, VBOs[-1])
     glBufferData(GL_ARRAY_BUFFER, obj_buffer.nbytes, obj_buffer, GL_STATIC_DRAW)
 
     # vertices
@@ -139,31 +141,7 @@ def rotate_obj(obj_index, pitch, roll, yaw):
     # Create rotation matrices from the euler angles
     pass
 
-def create_axes_list():
-        '''Creates display lists to render unit length x,y,z axes.'''
-        index = glGenLists(1)
-        disp_list_indices.append(index)
-        glNewList(index, GL_COMPILE)
-        glBegin(GL_LINES)
-        glColor3f(1.0, 0.0, 0.0)
-        glVertex3f(0.0, 0.0, 0.0)
-        glVertex3f(10.0, 0.0, 0.0)
-        glColor3f(0.0, 1.0, 0.0)
-        glVertex3f(0.0, 0.0, 0.0)
-        glVertex3f(0.0, 10.0, 0.0)
-        glColor3f(0.0, 0.0, 1.0)
-        glVertex3f(0.0, 0.0, 0.0)
-        glVertex3f(0.0, 0.0, 10.0)
 
-        glColor3f(1.0, 1.0, 1.0)
-        glVertex3f(0.0, 0.0, 0.0)
-        glVertex3f(-10.0, 0.0, 0.0)
-        glVertex3f(0.0, 0.0, 0.0)
-        glVertex3f(0.0, -10.0, 0.0)
-        glVertex3f(0.0, 0.0, 0.0)
-        glVertex3f(0.0, 0.0, -10.0)
-        glEnd()
-        glEndList()
 '''
         def label_axis(x, y, z, label):
             glRasterPos3f(x, y, z)
@@ -195,31 +173,75 @@ def create_axes_list():
             except:
                 pass
 '''
+'''
+C++ OpenGL lines with shaders example
+struct LineSegment_t
+{
+  float x1, y1;
+  float r1,g1,b1,a1;
+  float x2, y2;
+  float r2,g2,b2,a2;
+};
 
-def draw_axes():
-    glBegin(GL_LINES)
-    glColor3f(1., 0., 0.)
-    glVertex3f(-5000., 0., 0.)
-    glVertex3f(5000., 0., 0.)
-    glEnd()
+int num_verts = lines.size()*2;
+glBindVertexArray( line_vao ); // setup for the layout of LineSegment_t
+glBindBuffer(GL_ARRAY_BUFFER, LineBufferObject);
+glBufferData(GL_ARRAY_BUFFER, sizeof(LineSegment_t)/2 * num_verts, &lines[0], GL_DYNAMIC_DRAW);
+glDrawArrays(GL_LINES, 0, num_verts );
+'''
 
-    glBegin(GL_LINES)
-    glColor3f(0., 0., 1.)
-    glVertex3f(0., -5000., 0.)
-    glVertex3f(0., 5000., 0.)
-    glEnd()
+''' Another possible exmple
+GLfloat lineSeg[] =
+{
+    0.0f, 0.0f, 0.0f, // first vertex
+    2.0f, 0.0f, 2.0f // second vertex
+};
 
-    glBegin(GL_LINES)
-    glColor3f(0., 1., 0.)
-    glVertex3f(0., 0., -5000.)
-    glVertex3f(0., 0., 5000.)
-    glEnd()
+GLuint lineVAO, lineVBO;
+glGenVertexArrays(1, &lineVAO);
+glGenBuffers(1, &lineVBO);
+glBindVertexArray(lineVAO);
+glBindBuffer(GL_ARRAY_BUFFER, lineVBO);
+glBufferData(GL_ARRAY_BUFFER, sizeof(lineSeg), &lineSeg, GL_STATIC_DRAW);
+glEnableVertexAttribArray(0);
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(GLfloat), (void*)0);
+'''
+
+# Returns the index of the object in VAOs, buf_lens, 
+def load_line(x1, y1, z1, x2, y2, z2, red, green, blue):
+    VAOs.append(glGenVertexArrays(1))
+    VBOs.append(glGenBuffers(1))
+    buf = np.array([x1, y1, z1, x2, y2, z2], dtype='float32')
+    buf_lens.append(2)
+
+    # Vertex Array Object
+    glBindVertexArray(VAOs[-1])
+    glBindBuffer(GL_ARRAY_BUFFER, VBOs[-1])
+    glBufferData(GL_ARRAY_BUFFER, buf.nbytes, buf, GL_STATIC_DRAW)
+    glEnableVertexAttribArray(0)    # THIS CAUSES CRASH!! TODO
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * 4, None)
+    return len(VBOs)-1
+
+
+def draw_lines(obj_index, obj_loc):
+    translation_matrix = pyrr.matrix44.create_from_translation(pyrr.Vector3([0, 0, 0]))
+    glBindVertexArray(VAOs[obj_index])
+    glBindBuffer(GL_ARRAY_BUFFER, VBOs[obj_index])
+    glColor3f(0.0, 1.0, 0.0)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * 4, None)
+    glUniformMatrix4fv(obj_loc, 1, GL_FALSE, translation_matrix)
+    glDrawArrays(GL_LINES, 0, buf_lens[obj_index])
+    #glDisableVertexAttribArray(0); //?
+    #glBindBuffer(GL_ARRAY_BUFFER, 0); //Unbind
+
 
 def main():
     pygame.init()
     pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE) # |pygame.FULLSCREEN
     pygame.mouse.set_visible(True)
     pygame.event.set_grab(True)
+
+    #gluPerspective(45, (WIDTH / HEIGHT), 0.1, 50.0)
 
     shader = compileProgram(compileShader(vertex_src, GL_VERTEX_SHADER), compileShader(fragment_src, GL_FRAGMENT_SHADER))
 
@@ -229,7 +251,7 @@ def main():
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-    projection = pyrr.matrix44.create_perspective_projection_matrix(45, 1280 / 720, 0.1, 100)
+    projection = pyrr.matrix44.create_perspective_projection_matrix(45, WIDTH / HEIGHT, 0.1, 100)
 
     model_loc = glGetUniformLocation(shader, "model")
     proj_loc = glGetUniformLocation(shader, "projection")
@@ -239,10 +261,10 @@ def main():
 
     running = True
 
-    earth_index = load_obj("meshes/earth.obj", "meshes/earth.png")
+    #earth_index = load_obj("meshes/earth.obj", "meshes/earth.png")
 
-    create_axes_list()
-    glCallList(disp_list_indices[-1])
+    line1 = load_line(0, 0, 0, 50, 0, 0, 1, 0, 0)
+    #glTranslatef(0.0, 0.0, -5.0)
     
     while running:
         for event in pygame.event.get():
@@ -291,7 +313,9 @@ def main():
 
         rot_y = 0.02 * pygame.time.get_ticks()
         #draw_obj(earth_index, 0, 0, 0, 0, rot_y, 22.5, model_loc)
+        draw_lines(line1, model_loc)
         pygame.display.flip()
+        pygame.time.wait(10)
 
     pygame.quit()
 
