@@ -73,7 +73,7 @@ class ObjLoader:
 
 
         with open(file, 'r') as f:
-            line = f.readline()
+            line = f.readline(5_000_000)
             while line:
                 values = line.split()
                 if values[0] == 'v':
@@ -88,7 +88,7 @@ class ObjLoader:
                         ObjLoader.search_data(val, all_indices, 'f', 'int')
                         indices.append(int(val[0])-1)
 
-                line = f.readline()
+                line = f.readline(5_000_000)
 
         if sorted:
             # use with glDrawArrays
